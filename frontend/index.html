@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Real Estate Reel Opening Studio</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-badge">9:16</div>
+      <div>
+        <h1>Reel Opening Studio</h1>
+        <p class="subtitle">冒頭2秒フック × 自然な本編展開 / ローカル40パターン自動生成</p>
+      </div>
+    </div>
+    <nav class="nav-tabs">
+      <button class="nav-btn active" data-tab="studio">制作スタジオ</button>
+      <button class="nav-btn" data-tab="history">生成履歴</button>
+      <button class="nav-btn" data-tab="fonts">フォントライブラリ</button>
+      <button class="nav-btn" data-tab="preferences">好み・NG学習</button>
+    </nav>
+  </header>
+
+  <main class="container">
+    <section id="tab-studio" class="tab-panel active">
+      <div class="studio-layout">
+        <aside class="input-panel">
+          <div class="card">
+            <div class="card-header">
+              <h2>1. 画像・動画素材</h2>
+              <span class="hint">使用する素材を選択・並べ替え</span>
+            </div>
+            <div id="dropzone" class="dropzone">
+              <input id="asset-file-input" type="file" multiple accept="image/*,video/*" hidden />
+              <div class="dropzone-inner">
+                <strong>ここに画像・動画をドラッグ＆ドロップ</strong>
+                <span>またはクリックして複数選択（JPG / PNG / MP4 / MOV）</span>
+              </div>
+            </div>
+            <div id="asset-list" class="asset-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>2. 物件情報</h2>
+              <span class="hint">入力事実のみを正確に使用します</span>
+            </div>
+            <div class="form-grid">
+              <label>物件価格
+                <input id="prop-price" type="text" placeholder="例: 580万円" />
+              </label>
+              <label>所在地
+                <input id="prop-location" type="text" placeholder="例: 新潟県村上市〇〇" />
+              </label>
+              <label>土地面積
+                <input id="prop-land" type="text" placeholder="例: 240㎡（約72坪）" />
+              </label>
+              <label>建物面積
+                <input id="prop-building" type="text" placeholder="例: 115㎡（4LDK）" />
+              </label>
+              <label class="full-span">その他の情報
+                <input id="prop-other" type="text" placeholder="例: 築45年・駐車2台可・即入居可" />
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>3. アピールポイント</h2>
+              <span class="hint">先頭が冒頭2秒フックに優先採用されます</span>
+            </div>
+            <div id="bullet-list" class="bullet-list"></div>
+            <div class="bullet-add-row">
+              <input id="new-bullet-input" type="text" placeholder="例: 海まで徒歩1分" />
+              <button id="add-bullet-btn" class="btn btn-secondary">＋ 追加</button>
+            </div>
+            <label class="mt-sm">自由文章（改行で複数入力可）
+              <textarea id="appeal-free-text" rows="3" placeholder="例:&#10;目の前に広がる日本海&#10;古民家ならではの梁"></textarea>
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>4. デザインの系統・尺設定</h2>
+            </div>
+            <div id="style-chips" class="chip-group"></div>
+            <label class="mt-sm">動画の長さ（冒頭2秒フック＋続きの構成）
+              <select id="duration-mode">
+                <option value="auto">おまかせ（内容に合わせて約3.5〜7秒で最適化）</option>
+                <option value="short">コンパクト（約3.5〜4.2秒：テンポ重視）</option>
+                <option value="medium">スタンダード（約4.5〜6.0秒：バランス重視）</option>
+                <option value="long">ストーリー（約6.0〜8.0秒：しっかり紹介）</option>
+              </select>
+            </label>
+            <label class="mt-sm">文字の向き
+              <select id="writing-mode">
+                <option value="auto">おまかせ（和室・古民家・明朝系は縦書きが出やすい）</option>
+                <option value="horizontal">横書きのみ</option>
+                <option value="vertical">縦書きのみ（和の雰囲気）</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="generate-sticky">
+            <button id="generate-btn" class="btn btn-primary btn-lg">
+              40パターンのオープニングを生成
+            </button>
+          </div>
+        </aside>
+
+        <section class="results-panel">
+          <div class="results-toolbar">
+            <div>
+              <h2>生成結果の比較（40パターン）</h2>
+              <p id="batch-status-text" class="status-text">左の情報を入力し、「生成」を押してください。</p>
+            </div>
+            <div class="toolbar-actions">
+              <button id="play-all-btn" class="btn btn-secondary" disabled>全再生</button>
+              <button id="pause-all-btn" class="btn btn-secondary" disabled>全停止</button>
+              <button id="regenerate-btn" class="btn btn-accent" disabled>作り直し（新しい40種）</button>
+            </div>
+          </div>
+
+          <div id="progress-wrap" class="progress-wrap hidden">
+            <div class="progress-bar"><div id="progress-fill" class="progress-fill"></div></div>
+            <span id="progress-count">0 / 40</span>
+          </div>
+
+          <div id="error-banner" class="error-banner hidden"></div>
+
+          <div id="video-grid" class="video-grid">
+            <div class="empty-state">
+              <p>生成ボタンを押すと、ここに40種類の9:16オープニング動画が並びます。</p>
+              <p class="sub">最初の約2秒のインパクトと、その後の本編へのつながりを並べて比較できます。</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="tab-history" class="tab-panel">
+      <div class="panel-header">
+        <h2>生成履歴</h2>
+        <label class="inline-check">
+          <input id="history-fav-only" type="checkbox" /> お気に入りのみ表示
+        </label>
+      </div>
+      <div id="history-container" class="history-container"></div>
+    </section>
+
+    <section id="tab-fonts" class="tab-panel">
+      <div class="panel-header">
+        <h2>ローカル・フォントライブラリ</h2>
+        <span class="hint">data/fonts/ に保管され、商用利用条件や有効/除外を管理できます</span>
+      </div>
+
+      <div class="card mb-md">
+        <div class="font-upload-grid">
+          <label>フォントファイル (.ttf / .otf / .ttc)
+            <input id="font-file-input" type="file" accept=".ttf,.otf,.ttc" />
+          </label>
+          <label>カテゴリ
+            <select id="font-upload-cat"></select>
+          </label>
+          <label>ライセンス表記
+            <input id="font-upload-license" type="text" value="商用利用可（フリーフォント）" />
+          </label>
+          <label class="inline-check" style="align-self:end; padding-bottom:8px;">
+            <input id="font-upload-comm" type="checkbox" checked /> 商用利用OK
+          </label>
+          <button id="font-upload-btn" class="btn btn-primary" style="align-self:end;">フォントを追加</button>
+        </div>
+      </div>
+
+      <div id="font-list" class="font-list"></div>
+    </section>
+
+    <section id="tab-preferences" class="tab-panel">
+      <div class="panel-header">
+        <h2>好み・NG学習データ</h2>
+        <span class="hint">ローカルDBに蓄積され、次回生成時の選別・探索バランスに反映されます</span>
+      </div>
+      <div class="prefs-grid">
+        <div class="card">
+          <h3>NG登録済み要素（完全除外）</h3>
+          <div id="blocked-list" class="pref-list"></div>
+        </div>
+        <div class="card">
+          <h3>高評価・系統ブースト状況（過度な単調化を防ぐ上限付き）</h3>
+          <div id="weights-list" class="pref-list"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
