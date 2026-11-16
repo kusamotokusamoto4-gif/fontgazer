@@ -186,6 +186,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--latin", type=int, default=0, metavar="N",
                     help="日本語非対応（欧文のみ）の人気上位Nファミリーも収集")
+    ap.add_argument("--display", type=int, default=0, metavar="N",
+                    help="欧文の装飾系(display)の人気上位Nファミリーも収集")
+    ap.add_argument("--color", action="store_true",
+                    help="色つき(カラー)フォントをすべて収集")
     ap.add_argument("--preview-only", action="store_true")
     args = ap.parse_args()
 
@@ -199,11 +203,17 @@ def main():
 
     jp = [f for f in fams if "japanese" in f.get("subsets", [])]
     jp.sort(key=lambda f: f["family"].lower())
+    others = [f for f in fams if "japanese" not in f.get("subsets", [])]
+    others.sort(key=lambda f: f.get("popularity", 10 ** 6))
     latin = []
     if args.latin > 0:
-        others = [f for f in fams if "japanese" not in f.get("subsets", [])]
-        others.sort(key=lambda f: f.get("popularity", 10 ** 6))
-        latin = others[: args.latin]
+        latin += others[: args.latin]
+    if args.display > 0:  # 縁取り・影・装飾入りが多い display カテゴリ
+        latin += [f for f in others if f.get("category") == "display"][: args.display]
+    if args.color:  # 色つき(カラー)フォント
+        latin += [f for f in others if f.get("colorCapabilities")]
+    seen = set()
+    latin = [f for f in latin if not (f["family"] in seen or seen.add(f["family"]))]
 
     print("[3/4] ダウンロード開始: 日本語対応 %d 件 / 欧文のみ %d 件（候補）" % (len(jp), len(latin)))
     ok = skipped = 0
@@ -256,7 +266,9 @@ PREVIEW_TEMPLATE = r"""<!doctype html>
   .card:hover { border-color:var(--sub); }
   .name { font-size:13px; font-weight:600; font-family:system-ui,sans-serif; }
   .meta { font-size:11px; color:var(--sub); margin-top:2px; font-family:system-ui,sans-serif; }
-  .sample { margin-top:10px; line-height:1.35; word-break:break-all; min-height:1.4em; }
+  .sample { margin-top:10px; line-height:1.5; word-break:break-all; min-height:1.6em; color:#fff;
+            padding:10px 14px; border-radius:8px; overflow:hidden;
+            background:linear-gradient(135deg,#5b6b7b,#9aa8b5); }
   .tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--sub); margin-right:4px; }
   #count { font-size:13px; color:var(--sub); }
 </style>
@@ -272,6 +284,7 @@ PREVIEW_TEMPLATE = r"""<!doctype html>
     <option value="jp">日本語対応のみ</option>
     <option value="latin">欧文のみ</option>
   </select>
+  <select id="style"></select>
   <button id="theme">背景切替</button>
   <span id="count"></span>
 </header>
@@ -304,7 +317,11 @@ function render() {
     el.querySelector(".meta").innerHTML =
       '<span class="tag">' + (f.japanese ? "日本語対応" : "欧文のみ") + '</span>' + f.license + ' / ' + f.files.length + ' ファイル';
     const s = el.querySelector(".sample");
-    s.textContent = $("text").value;
+    const span = document.createElement("span");
+    span.textContent = $("text").value;
+    span.style.cssText = STYLES[$("style").value] || "";
+    span.style.display = "inline-block";
+    s.appendChild(span);
     s.style.fontFamily = '"' + fam + '", sans-serif';
     s.style.fontSize = $("size").value + "px";
     s.style.fontWeight = $("weight").value;
@@ -314,7 +331,21 @@ function render() {
   });
   $("count").textContent = list.length + " 件";
 }
-["text","q","size","weight","filter"].forEach(id => $(id).addEventListener("input", render));
+// 装飾の見本（フォントではなく、文字に重ねる縁取り・光・影・グラデ）
+const STYLES = {
+  "装飾なし（白文字）": "",
+  "青い光＋白縁": "color:#1f3dff;-webkit-text-stroke:.14em #fff;paint-order:stroke fill;text-shadow:0 0 .25em #2a6bff,0 0 .5em #2a6bff;",
+  "黄色の立体影（斜体）": "color:#fff200;transform:skewX(-10deg);text-shadow:.04em .04em 0 #c9a400,.08em .08em 0 #c9a400,.12em .12em 0 #8a6d00,.16em .16em 0 #8a6d00;",
+  "赤い光＋黄白グラデ": "background:linear-gradient(#fff,#ffe100);-webkit-background-clip:text;background-clip:text;color:transparent;filter:drop-shadow(0 0 .1em #ff1a1a) drop-shadow(0 0 .2em #ff1a1a);",
+  "斜体＋黒縁": "color:#fff;transform:skewX(-12deg);-webkit-text-stroke:.14em #000;paint-order:stroke fill;",
+  "橙グラデ＋白縁＋黄光": "color:#ff8a00;-webkit-text-stroke:.12em #fff;paint-order:stroke fill;filter:drop-shadow(0 0 .15em #ffe94d);",
+  "黒い影（白文字）": "color:#fff;text-shadow:.05em .05em .1em #000,0 0 .15em #000;",
+  "黄文字＋黒縁（太字テロップ）": "color:#ffd400;-webkit-text-stroke:.14em #000;paint-order:stroke fill;",
+  "白文字＋オレンジ帯": "color:#fff;background:#ff7a00;padding:.05em .3em;",
+  "白文字＋ピンク紫帯": "color:#fff;background:linear-gradient(90deg,#e86bd6,#9b6bff);padding:.05em .3em;"
+};
+Object.keys(STYLES).forEach(k => { const o = document.createElement("option"); o.value = o.textContent = k; $("style").appendChild(o); });
+["text","q","size","weight","filter","style"].forEach(id => $(id).addEventListener("input", render));
 $("theme").onclick = () => document.body.classList.toggle("light");
 render();
 </script>
