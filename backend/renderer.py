@@ -2,7 +2,6 @@ import math
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -10,7 +9,6 @@ import imageio_ffmpeg
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .fontutil import load_font
-from .vertical_text import glyph_kind, to_vertical_text, wrap_vertical
 
 from .database import BASE_DIR
 
@@ -162,31 +160,6 @@ def _telop_glyph(xy, ch: str, rec: Dict[str, Any], telop: Dict[str, Any], y0: fl
     }
 
 
-def _put_glyph(mask: Image.Image, draw: ImageDraw.ImageDraw, g: Dict[str, Any], stroke: int) -> None:
-    """文字1つを mask に白で描く。
-
-    通常は g["xy"] を左上として描く。縦書き用に、次の指定ができる:
-      g["anchor"]="mm" : g["xy"] を文字の中心として描く
-      g["rot"]=True    : 時計回りに90度回して描く（長音「ー」や括弧など）
-    """
-    x, y = g["xy"]
-    stroke_fill = 255 if stroke > 0 else None
-    if g.get("rot"):
-        f = g["font"]
-        cell = int(f.size * 1.7) + 2 * int(stroke) + 8
-        tmp = Image.new("L", (cell, cell), 0)
-        ImageDraw.Draw(tmp).text(
-            (cell / 2.0, cell / 2.0), g["ch"], font=f, fill=255,
-            stroke_width=int(stroke), stroke_fill=stroke_fill, anchor="mm",
-        )
-        tmp = tmp.rotate(-90, resample=Image.Resampling.BICUBIC)
-        mask.paste(255, (int(round(x - cell / 2.0)), int(round(y - cell / 2.0))), tmp)
-        return
-    kw: Dict[str, Any] = {"anchor": "mm"} if g.get("anchor") else {}
-    draw.text((x, y), g["ch"], font=g["font"], fill=255,
-              stroke_width=int(stroke), stroke_fill=stroke_fill, **kw)
-
-
 def _compose_telop(size: Tuple[int, int], glyphs: List[Dict[str, Any]], telop: Dict[str, Any]) -> Image.Image:
     """テロップ装飾（光 → 立体影 → 縁取り → グラデ塗り → 傾き）をかけた文字レイヤーを作る。"""
     w, h = size
@@ -202,15 +175,18 @@ def _compose_telop(size: Tuple[int, int], glyphs: List[Dict[str, Any]], telop: D
     c1, c2 = telop["fill"][0], telop["fill"][1]
 
     for g in glyphs:
-        _put_glyph(fill_m, d_fill, g, 0)
-        _put_glyph(outer_m, d_outer, g, g["sw"])
+        x, y = g["xy"]
+        d_fill.text((x, y), g["ch"], font=g["font"], fill=255)
+        d_outer.text((x, y), g["ch"], font=g["font"], fill=255, stroke_width=g["sw"], stroke_fill=255)
         glow_r = max(glow_r, g["glow"])
         if g["ext"] > 0:
             m = ext_masks.get(g["ext"])
             if m is None:
                 m = Image.new("L", size, 0)
                 ext_masks[g["ext"]] = m
-            _put_glyph(m, ImageDraw.Draw(m), g, g["sw"])
+            ImageDraw.Draw(m).text(
+                (x, y), g["ch"], font=g["font"], fill=255, stroke_width=g["sw"], stroke_fill=255
+            )
         ly = g["line_y"]
         if ly not in lines_done:
             lines_done.add(ly)
@@ -250,199 +226,6 @@ def _compose_telop(size: Tuple[int, int], glyphs: List[Dict[str, Any]], telop: D
     return out
 
 
-def _fallback_telop(palette: Dict[str, Any], stroke_w: int) -> Dict[str, Any]:
-    """テロップ装飾が無いDNA用の、素直な文字（縁取りだけ）の設定。"""
-    text_c = list(palette["text"][:3])
-    return {
-        "id": "plain", "label": "標準",
-        "fill": [text_c, text_c],
-        "outline_color": list(palette["stroke"][:3]),
-        "outline_ratio": 0.0,
-        "extrude_ratio": 0.0, "glow_ratio": 0.0, "skew": 0.0,
-    }
-
-
-def _char_shadow(img: Image.Image, opacity: float, blur: int, dx: int, dy: int) -> Image.Image:
-    if opacity <= 0:
-        return img
-    w, h = img.size
-    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    alpha_ch = img.getchannel("A").point(lambda a: int(a * opacity))
-    fill = Image.new("RGBA", (w, h), (0, 0, 0, 255))
-    fill.putalpha(alpha_ch)
-    if blur > 0:
-        fill = fill.filter(ImageFilter.GaussianBlur(max(1, blur // 2)))
-    shadow.alpha_composite(fill, (dx, dy))
-    shadow.alpha_composite(img)
-    return shadow
-
-
-def _build_vertical_text_block_sprite(
-    headline: str,
-    sublines: List[str],
-    dna: Dict[str, Any],
-    is_hook: bool,
-    zone: str,
-) -> Dict[str, Any]:
-    """縦書きのテロップブロックを作る。列は右から左へ、文字は上から下へ並ぶ。"""
-    font_path = dna["font_path"]
-    font_weight = dna.get("font_weight")
-    palette = dna["palette"]
-    align = dna["align"]
-    letter_spacing = int(dna["letter_spacing"])
-    line_spacing = float(dna["line_spacing"])
-    stroke_w = int(dna["stroke_width"])
-    shadow_blur = int(dna["shadow_blur"])
-    shadow_opacity = float(dna["shadow_opacity"])
-    sdx, sdy = dna["shadow_offset"]
-    decoration = dna["decoration"]
-    telop = dna.get("telop")
-    # 斜体は縦書きでは不自然なので外す
-    telop = dict(telop, skew=0) if telop else _fallback_telop(palette, stroke_w)
-
-    base_size = int(dna["hook_size"] if is_hook else dna["body_size"])
-    max_col_h = TARGET_H - SAFE_TOP - SAFE_BOTTOM - 120
-    max_block_w = TARGET_W - SAFE_LEFT - SAFE_RIGHT - 60
-    cap_chars = 10 if is_hook else 12
-
-    head_txt = to_vertical_text(headline)
-    sub_txts = [t for t in (to_vertical_text(x) for x in sublines) if t][:3]
-
-    def adv_of(sz: int) -> int:      # 1文字ぶんの縦の送り
-        return int(sz * 1.04) + letter_spacing
-
-    def colw_of(sz: int) -> int:     # 1列の幅
-        return int(sz * 1.14)
-
-    def gap_of(sz: int) -> int:      # 列と列の間
-        return max(12, int(sz * (line_spacing - 1.0) + sz * 0.1))
-
-    # 列が横幅に収まる大きさまで、少しずつ小さくする
-    size = base_size
-    while True:
-        sub_size = max(30, int(size * 0.56))
-        per_col = max(3, min(cap_chars, max_col_h // adv_of(size)))
-        sub_per = max(3, min(cap_chars + 2, (max_col_h - int(size * 0.6)) // adv_of(sub_size)))
-        cols: List[Dict[str, Any]] = [
-            {"text": t, "size": size, "y_off": 0} for t in wrap_vertical(head_txt, per_col)
-        ]
-        sub_cols: List[str] = []
-        for t in sub_txts:
-            sub_cols.extend(wrap_vertical(t, sub_per))
-        cols += [{"text": t, "size": sub_size, "y_off": int(size * 0.7)} for t in sub_cols[:4]]
-        if not cols:
-            cols = [{"text": "　", "size": size, "y_off": 0}]
-        total_w = sum(colw_of(c["size"]) for c in cols) + sum(gap_of(c["size"]) for c in cols[:-1])
-        if total_w <= max_block_w or size <= 40:
-            break
-        size -= 4
-
-    for c in cols:
-        c["font"] = load_font(font_path, c["size"], font_weight)
-
-    pad_x = 34 if decoration in ("pill_bg", "frosted_card", "box_outline", "corner_brackets") else 24
-    pad_y = 26 if decoration in ("pill_bg", "frosted_card", "box_outline", "corner_brackets") else 20
-    extra_left = 18 if decoration == "left_accent_bar" else 0
-
-    block_h = max(c["y_off"] + len(c["text"]) * adv_of(c["size"]) for c in cols) + 20
-    shadow_pad = max(16, shadow_blur * 2 + max(abs(sdx), abs(sdy)) + stroke_w + 4)
-    shadow_pad = max(shadow_pad, _telop_pad(telop, size, block_h + pad_y * 2))
-
-    box_w = total_w + pad_x * 2 + extra_left + 20
-    box_h = block_h + pad_y * 2
-    sprite_w = box_w + shadow_pad * 2
-    sprite_h = box_h + shadow_pad * 2
-
-    if align == "left":
-        block_x = SAFE_LEFT - shadow_pad
-    elif align == "right":
-        block_x = TARGET_W - SAFE_RIGHT - box_w - shadow_pad
-    else:
-        block_x = (TARGET_W - sprite_w) // 2
-
-    if zone == "top":
-        block_y = SAFE_TOP + 60 - shadow_pad
-    elif zone == "center":
-        block_y = (TARGET_H - sprite_h) // 2 - 40
-    else:
-        block_y = TARGET_H - SAFE_BOTTOM - box_h - 40 - shadow_pad
-    block_y = max(0, min(block_y, TARGET_H - sprite_h))
-
-    content_left = shadow_pad + pad_x + extra_left + 10
-    top_y = shadow_pad + pad_y
-    block_top, block_bottom = shadow_pad, shadow_pad + box_h   # グラデーションは全体で1つ
-
-    glyphs: List[Dict[str, Any]] = []
-    char_items: List[Dict[str, Any]] = []
-    cursor = content_left + total_w
-    for col in cols:
-        sz = col["size"]
-        cw_, adv, font = colw_of(sz), adv_of(sz), col["font"]
-        cell_left = cursor - cw_
-        cx_center = cell_left + cw_ / 2.0
-        rec = {"font": font, "size": sz}
-        for i, ch in enumerate(col["text"]):
-            if ch in ("　", " "):
-                continue
-            cell_top = top_y + col["y_off"] + i * adv
-            cy_center = cell_top + adv / 2.0
-            kind = glyph_kind(ch)
-            dx = dy = 0.0
-            if kind == "punct":      # 句読点は右上へ
-                dx, dy = sz * 0.50, -sz * 0.60
-            elif kind == "small":    # 小書きのかなは少しだけ右上へ
-                dx, dy = sz * 0.08, -sz * 0.08
-
-            g = _telop_glyph((cx_center + dx, cy_center + dy), ch, rec, telop, block_top, block_bottom)
-            g["anchor"], g["rot"] = "mm", kind == "rotate"
-            glyphs.append(g)
-
-            # 1文字ずつ登場させるアニメ用の画像
-            c_pad = shadow_pad
-            c_w, c_h = int(cw_) + c_pad * 2, int(adv) + c_pad * 2
-            off = cell_top - block_top
-            gl = _telop_glyph(
-                (c_pad + cw_ / 2.0 + dx, c_pad + adv / 2.0 + dy), ch, rec, telop,
-                c_pad - off, c_pad - off + (block_bottom - block_top),
-            )
-            gl["anchor"], gl["rot"] = "mm", kind == "rotate"
-            c_img = _char_shadow(
-                _compose_telop((c_w, c_h), [gl], telop), shadow_opacity, shadow_blur, sdx, sdy
-            )
-            char_items.append({
-                "sprite": c_img,
-                "x": int(cell_left) - c_pad,
-                "y": int(cell_top) - c_pad,
-                "right_x": int(cell_left + cw_),
-                "top_y": int(cell_top),
-                "h": int(adv),
-                "cell": (int(cell_left), int(cell_top), int(cell_left + cw_), int(cell_top + adv)),
-            })
-        cursor -= cw_ + gap_of(sz)
-
-    text_layer = _compose_telop((sprite_w, sprite_h), glyphs, telop)
-    full_sprite = Image.new("RGBA", (sprite_w, sprite_h), (0, 0, 0, 0))
-    if shadow_opacity > 0:
-        alpha_mask = text_layer.getchannel("A").point(lambda a: int(a * shadow_opacity))
-        sh_img = Image.new("RGBA", (sprite_w, sprite_h), (0, 0, 0, 255))
-        sh_img.putalpha(alpha_mask)
-        if shadow_blur > 0:
-            sh_img = sh_img.filter(ImageFilter.GaussianBlur(shadow_blur))
-        full_sprite.alpha_composite(sh_img, (sdx, sdy))
-    full_sprite.alpha_composite(text_layer)
-
-    return {
-        "full_sprite": full_sprite,
-        "char_items": char_items,
-        "pos": (block_x, block_y),
-        "box_rect": (shadow_pad, shadow_pad, shadow_pad + box_w, shadow_pad + box_h),
-        "sprite_size": (sprite_w, sprite_h),
-        "decoration": decoration,
-        "palette": palette,
-        "vertical": True,
-    }
-
-
 def _build_text_block_sprite(
     headline: str,
     sublines: List[str],
@@ -450,9 +233,6 @@ def _build_text_block_sprite(
     is_hook: bool,
     zone: str,
 ) -> Dict[str, Any]:
-    if dna.get("writing_mode") == "vertical":
-        return _build_vertical_text_block_sprite(headline, sublines, dna, is_hook, zone)
-
     max_content_w = TARGET_W - SAFE_LEFT - SAFE_RIGHT - 48
     font_path = dna["font_path"]
     palette = dna["palette"]
@@ -686,17 +466,6 @@ def _draw_decoration_layer(
         draw.line((x0, y0, x0, y0 + arm), fill=accent, width=lw)
         draw.line((x1 - arm, y1, x1, y1), fill=accent, width=lw)
         draw.line((x1, y1 - arm, x1, y1), fill=accent, width=lw)
-    elif decoration == "v_rule_pair":
-        # 縦書き向け: 左右に縦の細線が上から伸びる
-        cur_y = int(y0 + (y1 - y0) * p)
-        draw.line((x0 + 6, y0, x0 + 6, cur_y), fill=accent, width=3)
-        draw.line((x1 - 6, y0, x1 - 6, cur_y), fill=accent, width=3)
-    elif decoration == "v_side_rule":
-        # 縦書き向け: 右側に1本の縦線、上端に小さな丸（書の落款のような飾り）
-        cur_y = int(y0 + (y1 - y0) * p)
-        draw.line((x1 - 8, y0 + 12, x1 - 8, cur_y), fill=accent, width=3)
-        if p > 0.15:
-            draw.ellipse((x1 - 14, y0 + 2, x1 - 2, y0 + 14), fill=accent)
     elif decoration == "double_line":
         span = int(((x1 - x0) * 0.5) * p)
         mid = (x0 + x1) // 2
@@ -781,16 +550,11 @@ def _render_element_to_frame(
             if t_local < reveal_span + 0.45 and int(t_local * 6) % 2 == 0 and visible_count > 0:
                 last_c = chars[min(n - 1, visible_count - 1)]
                 draw = ImageDraw.Draw(frame)
+                cur_x = bx + last_c["right_x"] + 4
+                cur_y0 = by + last_c["top_y"] + 4
+                cur_y1 = cur_y0 + last_c["h"] - 8
                 col = tuple(elem["palette"]["accent"]) + (int(240 * p_out),)
-                if elem.get("vertical"):
-                    # 縦書き: 打ったばかりの文字の下に、横棒のカーソル
-                    cx0, _cy0, cx1, cy1 = last_c["cell"]
-                    draw.rectangle((bx + cx0 + 8, by + cy1 + 2, bx + cx1 - 8, by + cy1 + 7), fill=col)
-                else:
-                    cur_x = bx + last_c["right_x"] + 4
-                    cur_y0 = by + last_c["top_y"] + 4
-                    cur_y1 = cur_y0 + last_c["h"] - 8
-                    draw.rectangle((cur_x, cur_y0, cur_x + 5, cur_y1), fill=col)
+                draw.rectangle((cur_x, cur_y0, cur_x + 5, cur_y1), fill=col)
         else:
             stagger = 0.55 / max(1, n)
             for idx, ci in enumerate(chars):
@@ -856,22 +620,6 @@ def _render_element_to_frame(
         if blur_r > 0:
             sprite_to_draw = full_sprite.filter(ImageFilter.GaussianBlur(blur_r))
 
-    elif anim_in == "mask_wipe" and elem.get("vertical"):
-        # 縦書き: 上から下へ文字が現れる（読む向きに合わせる）
-        e = _ease_out_expo(p_in)
-        vis_h = max(1, int(sh * e))
-        cropped = full_sprite.crop((0, 0, sw, vis_h))
-        if alpha < 0.999:
-            cropped = _apply_alpha(cropped, alpha)
-        frame.alpha_composite(cropped, (bx, by))
-        if 0.03 < p_in < 0.95:
-            draw = ImageDraw.Draw(frame)
-            x0, y0, x1, y1 = elem["box_rect"]
-            bar_y = by + vis_h
-            col = tuple(elem["palette"]["accent"]) + (230,)
-            draw.rectangle((bx + x0, bar_y - 3, bx + x1, bar_y + 2), fill=col)
-        return
-
     elif anim_in == "mask_wipe":
         e = _ease_out_expo(p_in)
         vis_w = max(1, int(sw * e))
@@ -887,18 +635,6 @@ def _render_element_to_frame(
             draw.rectangle((bar_x - 3, by + y0, bar_x + 2, by + y1), fill=col)
         return
 
-    elif anim_in == "split_reveal" and elem.get("vertical"):
-        # 縦書き: 左右に分けた半分が、上下からずれて合わさる
-        e = _ease_out_expo(p_in)
-        alpha *= _clamp01(p_in / 0.5)
-        mid_x = sw // 2
-        off = int(38 * (1.0 - e))
-        left_half = _apply_alpha(full_sprite.crop((0, 0, mid_x, sh)), alpha)
-        right_half = _apply_alpha(full_sprite.crop((mid_x, 0, sw, sh)), alpha)
-        frame.alpha_composite(left_half, (bx, by - off))
-        frame.alpha_composite(right_half, (bx + mid_x, by + off))
-        return
-
     elif anim_in == "split_reveal":
         e = _ease_out_expo(p_in)
         alpha *= _clamp01(p_in / 0.5)
@@ -908,18 +644,6 @@ def _render_element_to_frame(
         bot_half = _apply_alpha(full_sprite.crop((0, mid_y, sw, sh)), alpha)
         frame.alpha_composite(top_half, (bx - off, by))
         frame.alpha_composite(bot_half, (bx + off, by + mid_y))
-        return
-
-    elif anim_in == "clip_expand" and elem.get("vertical"):
-        # 縦書き: 中央から左右へ開く
-        text_p = _clamp01((p_in - 0.25) / 0.75)
-        e = _ease_out_cubic(text_p)
-        if e <= 0.01:
-            return
-        vis_w = max(1, int(sw * e))
-        x_left = (sw - vis_w) // 2
-        cropped = _apply_alpha(full_sprite.crop((x_left, 0, x_left + vis_w, sh)), alpha * e)
-        frame.alpha_composite(cropped, (bx + x_left, by))
         return
 
     elif anim_in == "clip_expand":
@@ -995,7 +719,7 @@ def render_video_from_dna(
 
     ffmpeg = find_ffmpeg()
 
-    cmd: List[str] = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-nostats"]
+    cmd: List[str] = [ffmpeg, "-y"]
     filter_parts: List[str] = []
     seg_labels: List[str] = []
 
@@ -1071,11 +795,9 @@ def render_video_from_dna(
         })
         cur_t += dur - (trans_dur if i < len(scenes) - 1 else 0.0)
 
-    # ffmpeg の出力はパイプに溜めず、ファイルへ逃がす。
-    # パイプのまま読まずに放置すると、容量がいっぱいになった時点で ffmpeg が止まり、
-    # 動画生成が永遠に終わらなくなる（特にWindowsはパイプ容量が小さい）ため。
-    err_file = tempfile.TemporaryFile()
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=err_file)
+    proc = subprocess.Popen(
+        cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
 
     assert proc.stdin is not None
     try:
@@ -1094,16 +816,10 @@ def render_video_from_dna(
         proc.stdin.close()
     except BrokenPipeError:
         pass
-    except Exception:
-        proc.kill()
-        err_file.close()
-        raise
 
-    proc.wait()
-    err_file.seek(0)
-    err_text = err_file.read().decode("utf-8", errors="ignore")
-    err_file.close()
+    _, stderr_bytes = proc.communicate()
     if proc.returncode != 0:
+        err_text = stderr_bytes.decode("utf-8", errors="ignore")
         raise RuntimeError(f"FFmpeg 動画生成エラー:\n{err_text[-1200:]}")
 
     thumb_t = min(0.85, total_dur * 0.4)

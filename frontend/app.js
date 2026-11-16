@@ -61,7 +61,6 @@ function populateProjectForm(proj) {
   $("#prop-other").value = p.other_info || "";
   $("#appeal-free-text").value = proj.appeal_free_text || "";
   $("#duration-mode").value = proj.duration_mode || "auto";
-  $("#writing-mode").value = proj.writing_mode || "auto";
   state.bullets = Array.isArray(proj.appeal_bullets) ? [...proj.appeal_bullets] : [];
   state.styles = Array.isArray(proj.styles) && proj.styles.length ? [...proj.styles] : ["auto"];
   renderBullets();
@@ -80,7 +79,6 @@ function collectProjectPayload() {
     appeal_free_text: $("#appeal-free-text").value,
     styles: state.styles.length ? state.styles : ["auto"],
     duration_mode: $("#duration-mode").value,
-    writing_mode: $("#writing-mode").value,
   };
 }
 
@@ -98,7 +96,7 @@ function scheduleSaveProject() {
   }, 500);
 }
 
-["#prop-price", "#prop-location", "#prop-land", "#prop-building", "#prop-other", "#appeal-free-text", "#duration-mode", "#writing-mode"]
+["#prop-price", "#prop-location", "#prop-land", "#prop-building", "#prop-other", "#appeal-free-text", "#duration-mode"]
   .forEach((sel) => $(sel).addEventListener("input", scheduleSaveProject));
 
 function renderBullets() {
@@ -385,7 +383,6 @@ function buildVideoCard(v) {
     <div class="video-body">
       <div class="dna-tags">
         <span class="dna-tag">${escapeHtml(dna.font_name || "")}</span>
-        ${dna.writing_label ? `<span class="dna-tag">${escapeHtml(dna.writing_label)}</span>` : ""}
         <span class="dna-tag">${escapeHtml(dna.hook_animation_label || "")}</span>
         <span class="dna-tag">${escapeHtml(dna.telop_label || dna.palette_name || "")}</span>
         <span class="dna-tag">${escapeHtml(dna.decoration_label || "")}</span>

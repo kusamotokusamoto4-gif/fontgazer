@@ -16,7 +16,6 @@ class ProjectInput(BaseModel):
     appeal_free_text: str = ""
     styles: List[str] = Field(default_factory=lambda: ["auto"])
     duration_mode: str = "auto"
-    writing_mode: str = "auto"  # auto(おまかせ) / horizontal(横書きのみ) / vertical(縦書きのみ)
 
 
 class AssetOrderRequest(BaseModel):

@@ -42,33 +42,7 @@ DECORATION_POOL = [
     {"id": "box_outline", "label": "細枠フレーム囲み", "styles": ["luxury", "minimal", "monotone"]},
     {"id": "corner_brackets", "label": "コーナーブラケット枠", "styles": ["stylish", "luxury", "cool"]},
     {"id": "double_line", "label": "上下ダブルライン", "styles": ["luxury", "calm", "natural"]},
-    # 縦書き専用（横書きでは使わない）
-    {"id": "v_rule_pair", "label": "縦書き: 左右の縦線", "styles": ["luxury", "calm", "natural", "minimal"], "vertical_only": True},
-    {"id": "v_side_rule", "label": "縦書き: 右の縦線と丸飾り", "styles": ["luxury", "calm", "natural"], "vertical_only": True},
 ]
-
-# 縦書きでは使わない装飾（文字の下に引く横線は、縦書きの列には合わない）
-VERTICAL_DECORATION_EXCLUDE = {"underline_sweep"}
-
-# 縦書きが似合う、和の雰囲気を示す言葉（物件情報にあれば縦書きを選びやすくする）
-JAPANESE_STYLE_HINTS = ("和室", "古民家", "畳", "縁側", "茶室", "床の間", "蔵", "町家", "日本家屋", "庭園", "数寄屋", "離れ")
-
-
-def _pick_writing_mode(pref: str, font: Dict[str, Any], selected_styles: List[str], japanese_hint: bool, rng: random.Random) -> str:
-    """縦書き/横書きを決める。pref が auto のときは、フォント・系統・和の雰囲気から確率で決める。"""
-    if pref in ("vertical", "horizontal"):
-        return pref
-    cat = font.get("category", "gothic")
-    p = 0.22
-    if cat in ("mincho", "brush"):
-        p = 0.45
-    elif cat in ("pop", "display", "rounded"):
-        p = 0.08
-    if any(s in ("luxury", "calm", "natural") for s in selected_styles):
-        p += 0.15
-    if japanese_hint:
-        p += 0.20
-    return "vertical" if rng.random() < min(0.85, p) else "horizontal"
 
 PALETTE_SEEDS = [
     {
@@ -492,13 +466,6 @@ def generate_batch_dnas(
 
     selected_styles = project.get("styles") or ["auto"]
     duration_mode = project.get("duration_mode", "auto")
-    writing_pref = project.get("writing_mode", "auto")
-    all_text = " ".join(
-        [str(v) for v in (project.get("property_info", {}) or {}).values()]
-        + [str(b) for b in (project.get("appeal_bullets") or [])]
-        + [str(project.get("appeal_free_text") or "")]
-    )
-    japanese_hint = any(k in all_text for k in JAPANESE_STYLE_HINTS)
     asset_count = len(assets or [])
 
     modes_pool = ["weighted"] * 4 + ["uniform"] * 4 + ["explore_novel"] * 2
@@ -553,17 +520,10 @@ def generate_batch_dnas(
             body_anim_pool = [a for a in valid_anims if a["energy"] != "lively" or hook_anim["energy"] == "lively"] or valid_anims
             body_anim = rng.choice(body_anim_pool)
 
-            writing_mode = _pick_writing_mode(writing_pref, font, selected_styles, japanese_hint, rng)
-            vertical = writing_mode == "vertical"
-            deco_pool = [
-                d for d in DECORATION_POOL
-                if (vertical or not d.get("vertical_only"))
-                and not (vertical and d["id"] in VERTICAL_DECORATION_EXCLUDE)
-            ]
             if palette.get("requires_badge"):
-                deco_candidates = [d for d in deco_pool if d["id"] in ("pill_bg", "frosted_card")]
+                deco_candidates = [d for d in DECORATION_POOL if d["id"] in ("pill_bg", "frosted_card")]
             else:
-                deco_candidates = deco_pool
+                deco_candidates = DECORATION_POOL
                 if selected_styles and "auto" not in selected_styles:
                     styled_decos = [d for d in deco_candidates if any(s in d["styles"] for s in selected_styles)]
                     if styled_decos and rng.random() < 0.75:
@@ -576,13 +536,6 @@ def generate_batch_dnas(
 
             hook_size = rng.randint(68, 92)
             body_size = rng.randint(50, 66)
-            if vertical:
-                # 縦書きは、右寄せ・中央・左寄せを使い分け、少し大きめにすると映える
-                hook_zone = rng.choices(["center", "top", "lower_third"], weights=[0.55, 0.25, 0.20], k=1)[0]
-                body_zone = rng.choice(["center", "lower_third"])
-                align = rng.choices(["right", "center", "left"], weights=[0.45, 0.35, 0.20], k=1)[0]
-                hook_size = rng.randint(76, 100)
-                body_size = rng.randint(54, 70)
             letter_spacing = rng.randint(0, 6)
             line_spacing = round(rng.uniform(1.20, 1.40), 2)
 
@@ -602,7 +555,7 @@ def generate_batch_dnas(
             matched_styles = [s for s in selected_styles if s != "auto"]
             primary_style = rng.choice(matched_styles) if matched_styles else rng.choice(palette["styles"])
 
-            combo_key = f"{font['id']}|{palette['id']}|{hook_anim['id']}|{decoration['id']}|{hook_zone}|{align}|{telop['id']}|{writing_mode}"
+            combo_key = f"{font['id']}|{palette['id']}|{hook_anim['id']}|{decoration['id']}|{hook_zone}|{align}|{telop['id']}"
             combo_hash = hashlib.sha1(combo_key.encode("utf-8")).hexdigest()[:12]
 
             if (
@@ -616,8 +569,6 @@ def generate_batch_dnas(
 
             best_dna = {
                 "combo_hash": combo_hash,
-                "writing_mode": writing_mode,
-                "writing_label": "縦書き" if vertical else "横書き",
                 "generation_mode": mode,
                 "primary_style": primary_style,
                 "primary_style_label": STYLE_LABEL_MAP.get(primary_style, primary_style),
