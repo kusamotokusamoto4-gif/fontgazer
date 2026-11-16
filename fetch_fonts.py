@@ -83,6 +83,94 @@ def norm(family):
     return re.sub(r"[^a-z0-9]", "", family.lower())
 
 
+def cmap_codepoints(path):
+    """フォントファイルの cmap から、収録されている文字コード一覧を取り出す（標準ライブラリのみ）。"""
+    import struct
+    cps = set()
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+            off = 0
+            if head[:4] == b"ttcf":
+                f.seek(12)
+                off = struct.unpack(">I", f.read(4))[0]
+            f.seek(off + 4)
+            n = struct.unpack(">H", f.read(2))[0]
+            f.seek(off + 12)
+            cmap_off = cmap_len = None
+            for _ in range(n):
+                rec = f.read(16)
+                if rec[:4] == b"cmap":
+                    cmap_off, cmap_len = struct.unpack(">II", rec[8:16])
+                    break
+            if cmap_off is None:
+                return cps
+            f.seek(cmap_off)
+            d = f.read(cmap_len)
+        num = struct.unpack(">H", d[2:4])[0]
+        for i in range(num):
+            _, _, so = struct.unpack(">HHI", d[4 + 8 * i: 12 + 8 * i])
+            fmt = struct.unpack(">H", d[so:so + 2])[0]
+            if fmt == 4:
+                segx2 = struct.unpack(">H", d[so + 6:so + 8])[0]
+                seg = segx2 // 2
+                ends = struct.unpack(">%dH" % seg, d[so + 14: so + 14 + segx2])
+                starts = struct.unpack(">%dH" % seg, d[so + 16 + segx2: so + 16 + 2 * segx2])
+                for s, e in zip(starts, ends):
+                    if s != 0xFFFF:
+                        cps.update(range(s, e + 1))
+            elif fmt == 12:
+                ng = struct.unpack(">I", d[so + 12:so + 16])[0]
+                for g in range(ng):
+                    s, e, _ = struct.unpack(">III", d[so + 16 + 12 * g: so + 28 + 12 * g])
+                    cps.update(range(s, min(e, 0x2FFFF) + 1))
+    except Exception:  # noqa: BLE001
+        pass
+    return cps
+
+
+def coverage(folder, files):
+    """ひらがな・カタカナ・漢字がどれだけ入っているかを調べる。"""
+    best = (0, 0, 0)
+    for fn in files:
+        cps = cmap_codepoints(os.path.join(folder, fn))
+        hira = sum(1 for c in cps if 0x3041 <= c <= 0x3096)
+        kata = sum(1 for c in cps if 0x30A1 <= c <= 0x30FA)
+        kanji = sum(1 for c in cps if 0x4E00 <= c <= 0x9FFF or 0x3400 <= c <= 0x4DBF)
+        if kanji + hira > best[0] + best[1]:
+            best = (kanji, hira, kata)
+    kanji, hira, kata = best
+    level = "full" if kanji >= 2000 else ("partial" if kanji > 0 else "none")
+    if kanji + hira + kata == 0:
+        level = "unknown"  # 読み取れなかった場合は除外しない
+    return {"kanji": kanji, "hiragana": hira, "katakana": kata, "kanji_level": level}
+
+
+def analyze_missing(cat, force=False):
+    changed = 0
+    for fid, e in cat.items():
+        if not force and "kanji_level" in e:
+            continue
+        folder = os.path.join(FONT_DIR, fid)
+        if os.path.isdir(folder) and e.get("files"):
+            e.update(coverage(folder, e["files"]))
+            changed += 1
+    if changed:
+        print("漢字の収録数を調べました: %d ファミリー" % changed)
+    return changed + drop_kana_only(cat)
+
+
+def drop_kana_only(cat):
+    """漢字がほとんど入っていない日本語フォント（かな専用など）を一覧から外す。ファイルは消さない。"""
+    drop = [k for k, e in cat.items()
+            if e.get("japanese") and e.get("origin") != "manual"
+            and e.get("kanji_level") in ("partial", "none")]
+    for k in drop:
+        print("  - 漢字が足りないため一覧から除外: %s" % cat[k]["family"])
+        del cat[k]
+    return len(drop)
+
+
 def load_catalog():
     if os.path.exists(CATALOG_JSON):
         with open(CATALOG_JSON, encoding="utf-8") as f:
@@ -97,9 +185,11 @@ def save_catalog(cat):
         json.dump(items, f, ensure_ascii=False, indent=2)
     with open(CATALOG_CSV, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["id", "family", "japanese", "category", "license", "source", "files", "fetched"])
+        w.writerow(["id", "family", "japanese", "kanji_level", "kanji_count", "category",
+                    "license", "source", "files", "fetched"])
         for e in items:
-            w.writerow([e["id"], e["family"], "yes" if e["japanese"] else "no", e["category"],
+            w.writerow([e["id"], e["family"], "yes" if e["japanese"] else "no",
+                        e.get("kanji_level", ""), e.get("kanji", ""), e["category"],
                         e["license"], e["source"], " | ".join(e["files"]), e["fetched"]])
 
 
@@ -171,6 +261,11 @@ def fetch_family(fam, lic, files, is_jp, cat):
         "files": sorted(saved),
         "fetched": datetime.date.today().isoformat(),
     }
+    cat[fid].update(coverage(folder, saved))
+    if is_jp and cat[fid]["kanji_level"] in ("partial", "none"):
+        print("    ! 漢字がほとんど入っていないため除外します: %s" % fam["family"])
+        del cat[fid]
+        return False
     return True
 
 
@@ -190,11 +285,15 @@ def main():
                     help="欧文の装飾系(display)の人気上位Nファミリーも収集")
     ap.add_argument("--color", action="store_true",
                     help="色つき(カラー)フォントをすべて収集")
+    ap.add_argument("--analyze", action="store_true",
+                    help="取得済みフォントの漢字収録数を調べ直してプレビューを更新")
     ap.add_argument("--preview-only", action="store_true")
     args = ap.parse_args()
 
     cat = load_catalog()
-    if args.preview_only:
+    if args.preview_only or args.analyze:
+        if analyze_missing(cat, force=args.analyze):
+            save_catalog(cat)
         build_preview(cat)
         return
 
@@ -233,6 +332,7 @@ def main():
                 skipped += 1
 
     print("[4/4] 記録とプレビューを作成中...")
+    analyze_missing(cat)
     save_catalog(cat)
     build_preview(cat)
 
@@ -270,8 +370,7 @@ PREVIEW_TEMPLATE = r"""<!doctype html>
             padding:10px 14px; border-radius:8px; overflow:hidden;
             background:linear-gradient(135deg,#5b6b7b,#9aa8b5); }
   .tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:99px; border:1px solid var(--sub); margin-right:4px; }
-  #count { font-size:13px; color:var(--sub); }
-</style>
+  #count { font-size:13px; color:var(--sub); }</style>
 </head>
 <body>
 <header>
@@ -305,8 +404,8 @@ const $ = id => document.getElementById(id);
 function render() {
   const q = $("q").value.trim().toLowerCase();
   const flt = $("filter").value;
-  const list = DATA.filter(f => (flt === "all" || (flt === "jp") === f.japanese) &&
-                                (!q || f.family.toLowerCase().includes(q)));
+  const pass = f => flt === "all" || (flt === "jp" && f.japanese) || (flt === "latin" && !f.japanese);
+  const list = DATA.filter(f => pass(f) && (!q || f.family.toLowerCase().includes(q)));
   grid.innerHTML = "";
   list.forEach(f => {
     const el = document.createElement("div"); el.className = "card";
