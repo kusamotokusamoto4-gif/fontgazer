@@ -26,6 +26,8 @@ echo   1. 日本語対応フォントを収集（続きから再開OK）
 echo   2. 1 に加えて、欧文のみ人気上位100も収集
 echo   3. プレビューを開く（日本語テロップで確認）
 echo   4. GitHub に保存（commit と push）
+echo   5. 装飾系（縁取り・影・カラー）を追加収集
+echo   6. 他サイトのフォントを取り込む（queue.json と inbox）
 echo   0. 終了
 echo ------------------------------------------
 set /p CHOICE=番号を入力: 
@@ -34,6 +36,8 @@ if "%CHOICE%"=="1" goto fetch
 if "%CHOICE%"=="2" goto fetchlatin
 if "%CHOICE%"=="3" goto preview
 if "%CHOICE%"=="4" goto gitpush
+if "%CHOICE%"=="5" goto deco
+if "%CHOICE%"=="6" goto manual
 if "%CHOICE%"=="0" exit /b 0
 goto menu
 
@@ -44,6 +48,16 @@ goto menu
 
 :fetchlatin
 %PY% fetch_fonts.py --latin 100
+pause
+goto menu
+
+:deco
+%PY% fetch_fonts.py --display 150 --color
+pause
+goto menu
+
+:manual
+%PY% add_manual.py
 pause
 goto menu
 

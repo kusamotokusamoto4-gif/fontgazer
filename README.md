@@ -43,3 +43,31 @@ fonts/
 
 - フォントは合計で数百MB規模になることがあります。GitHubは1ファイル100MBまでなので、超えるファイルがあった場合は警告が出ます（Google Fontsの日本語フォントは通常これ以下です）。
 - GitHubの無認証APIには回数制限があります。エラーが出たら環境変数 `GITHUB_TOKEN` を設定して再実行してください。
+
+## Google Fonts 以外のフォントを追加する（半自動）
+
+1. Claudeにスクショやフォント名を送り、候補の特定と、配布元の利用条件の確認をしてもらう
+2. 動画・SNS投稿・商用利用が可と確認できたものだけ、`queue.json` に記録される（`verdict: "ok"`）
+3. 配布ページでダウンロードした zip/ttf/otf を `inbox` フォルダに入れる（直リンクがあれば自動）
+4. `START.BAT` の `6` を実行 → `fonts/` に展開され、規約の確認元URLと確認日が `catalog.json` に残る
+
+`queue.json` の例:
+
+```json
+[
+  {
+    "name": "フォント名",
+    "id": "font-name",
+    "japanese": true,
+    "verdict": "ok",
+    "source_url": "配布ページURL",
+    "download_url": "",
+    "license_summary": "商用利用可・動画/SNS投稿可（規約の要約）",
+    "license_url": "規約のURL",
+    "checked": "2026-11-16"
+  }
+]
+```
+
+`verdict` が `ok` でないもの、規約の要約とURLが空のものは取り込まれません。
+Instagram・CapCutなどアプリ内蔵のフォントは、アプリ内だけの利用許諾のことが多く、対象外です。
